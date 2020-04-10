@@ -1,0 +1,13 @@
+[package]
+name = "simplecrawler"
+version = "0.1.0"
+authors = ["Konstantin Yegupov <kyegupov4@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+url = "*"
+select = "*"
+reqwest = "0.10"
+tokio = { version = "*", features = ["full"] }
+futures = "*"
+fstrings = "*"
