@@ -180,13 +180,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .in_progress
                     .insert(url.clone());
 
-                // We need to make copies of all objects that we are going to pass (potentially)
+                // We need to make copies of all the objects we are going to pass (potentially)
                 // to another thread.
                 let url_copy = url.clone();
                 let crawler_copy = crawler.clone();
-                // Note the "move" keyword. It demands that EVERY object referenced within
+                // Note the `move` keyword. It demands that EVERY object referenced within
                 // can be "moved" to a new ownership (i.e. into another thread) and will not be
-                // used by original code anymore. So now, `crawler` and `crawler_copy` objects
+                // used by the original code anymore. So, now, `crawler` and `crawler_copy` objects
                 // are independent and they can be independenly destroyed by different threads,
                 // but they refer to the same state via Arc.
                 tokio::spawn(async move {
