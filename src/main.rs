@@ -140,12 +140,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // State is a shared mutable object under a lock. To use it, we need to get a "transaction",
     // by using `.write().unwrap()` (here, .unwrap() will panic if the lock was poisoned by a panic
     // in another transaction).
-    // Since we do not store this "transaction" anywhere, it is immediately closed and the lock is
-    // freed.
     state
         .write()
         .unwrap()
         .enqueue(Arc::from(base_url.to_string()));
+    // Since we do not store this "transaction" anywhere, it is immediately closed and the lock is
+    // freed.
 
     let crawler = Crawler {
         config: config,
