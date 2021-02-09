@@ -2,7 +2,7 @@
 // `cargo run http://website.url/` to build+run in debug mode
 
 #[macro_use]
-extern crate fstrings; // for string interpolation to work
+extern crate fstrings; // for string interpolation to work: see *f! macros
 
 use std::collections::BTreeSet; // you can also use HashSet, but they are slower in Rust by default (because of the cryptographically secure hash function)
 use std::collections::VecDeque; // Queue type based on Vec (dynamic array)
@@ -11,24 +11,25 @@ use std::error::Error;
 use std::fs::{self, File};
 use std::io::prelude::*;
 use std::path::PathBuf;
+use std::ffi::OsStr;
 use std::sync::Arc; // Atomic-reference-counted: wrapper for a long-live value that can be passed betwee threads
 use std::sync::RwLock;
 use std::{thread, time};
 
-use futures::future::TryFutureExt; // Needed to enable unwrap_or_else mixin
+use futures::future::TryFutureExt; // Needed to enable unwrap_or_else mixin; in Rust just adding an "import" can unlock additional methods for objects!
 use reqwest::header::CONTENT_TYPE;
 use select::document::Document; // HTML parser
 use select::predicate::Name;
 use url::Url;
 
-#[derive(Default)] // Default "constructor" will be auto-generated
+#[derive(Default)] // This means the default "constructor" will be auto-generated
 struct CrawlerState {
-    all_urls: BTreeSet<Arc<str>>, // item type: shared, thread-safe strings
+    all_urls: BTreeSet<Arc<str>>, // set of shared, thread-safe strings
     to_fetch: VecDeque<Arc<str>>,
     in_progress: BTreeSet<Arc<str>>,
 }
 
-// Methods
+// Methods for the struct
 impl CrawlerState {
     fn enqueue(&mut self, url: Arc<str>) {
         if !self.all_urls.contains(&url) {
@@ -43,29 +44,52 @@ struct CrawlerConfig {
     base_url: Url,
 }
 
-fn url_to_file_path(url: &str) -> String {
-    // Use URL-encoding
-    return url::form_urlencoded::byte_serialize(url.as_bytes()).collect();
-}
-
 #[derive(Clone)] // Generates .clone() method, which is needed to pass the object to another thread.
 struct Crawler {
     config: Arc<CrawlerConfig>,
     state: Arc<RwLock<CrawlerState>>, // Shared mutable object, guarded by mutex for transactional safety
 }
 
+fn url_to_file_path(url: &Url) -> PathBuf {
+    let mut res = PathBuf::new();
+    let host = url.host_str().unwrap_or("unknown_host");
+    res.push(host);
+    if let Some(path_segs) = url.path_segments() {
+        for s in path_segs {
+            res.push(s);
+        }
+    }
+    if url.path().ends_with("/") {
+        res.push("index.html");
+    }
+    let mut fname = res.file_name().unwrap_or(OsStr::new("index.html")).to_owned();
+    if let Some(q) = url.query() {
+        fname.push("?");
+        fname.push(q);
+    }
+    res.set_file_name(fname);
+    res // last expression in the function is `return`ed
+}
+
+
 impl Crawler {
+
+
     // The Result type is Rust equivalient of Go's (result, error) pair, but you can only return
     // result (Ok) OR error (Err), not both.
     // `std::error::Error` is a trait (similar to interface), but in Go interface is always a pointer
     // resolved at runtime, while Rust tries to resolve traits at compile time. But this function
     // returns different kinds of errors, so we need to use Box<dyn> to return a pointer.
     // () is an empty type (void)
-    async fn process_file(&self, url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    async fn process_file(&self, url_str: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let url = Url::parse(url_str)?;
         let path = self.config.base_dir.join(url_to_file_path(&url));
+        let path_s = path.to_str().unwrap();
+        println_f!("Downloading {url} into {path_s}");
+        fs::create_dir_all(path.parent().unwrap())?;
         // `await` actually runs the async function (future)
         // `?` is the equivalent of Go's `if err != nil { return err }`
-        let res = reqwest::get(url).await?;
+        let res = reqwest::get(url.clone()).await?;
         let mime = res
             .headers()
             .get(CONTENT_TYPE)
@@ -85,7 +109,6 @@ impl Crawler {
             // If you don't use "unwrap" here, you get a warning about a potentially unhandled error
             file.write_all(text.as_bytes())?;
             let urls = extract_links(&text);
-            let this_document_url = Url::parse(&url)?;
 
             // Note: this "for" loop can only be written once. If you attempt to write
             // `for link_url in urls` after this loop, it will fail. Why? Because, the `urls` object
@@ -99,7 +122,7 @@ impl Crawler {
             // to store these strings longer than `urls` exists, you would need to convert them
             // with .to_owned()
             for link_url in urls {
-                let mut url2 = this_document_url.join(&link_url)?;
+                let mut url2 = url.join(&link_url)?;
                 url2.set_fragment(None);
                 let url2s: Arc<str> = Arc::from(url2.into_string());
                 if url2s.starts_with(self.config.base_url.as_str()) {
@@ -129,12 +152,13 @@ fn extract_links(html: &str) -> Vec<String> {
 #[tokio::main] // Needed to enable async functions
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let base_url = args.get(1).expect("Expected argument: starting URL"); // if x == nil { panic(message) }
+    let base_url_str = args.get(1).expect("Expected argument: starting URL"); // "expect" means if x == nil { panic(message) }
+    let base_url = Url::parse(base_url_str)?;
+    let base_dir = args.get(2).map(|x| &**x).unwrap_or(".");
     let config = Arc::new(CrawlerConfig {
-        base_url: Url::parse(&base_url)?,
-        base_dir: PathBuf::from(url_to_file_path(&base_url)),
+        base_url: base_url.clone(),
+        base_dir: PathBuf::from(base_dir),
     });
-    fs::create_dir_all(&config.base_dir)?;
 
     let state = Arc::new(RwLock::new(CrawlerState::default()));
     // State is a shared mutable object under a lock. To use it, we need to get a "transaction",
@@ -169,10 +193,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let maybe_url = crawler.state.write().unwrap().to_fetch.pop_front();
+        let to_fetch = crawler.state.read().unwrap().to_fetch.len();
+        let in_progress = crawler.state.read().unwrap().in_progress.len();
+        println_f!("In progress: {in_progress}, in queue: {to_fetch}");
         match maybe_url {
             Some(url) => {
-                let queued = crawler.state.read().unwrap().to_fetch.len();
-                println_f!("processing: {url}, queued: {queued}");
                 crawler
                     .state
                     .write()
@@ -205,9 +230,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 });
             }
             None => {
-                let remaining = crawler.state.read().unwrap().in_progress.len();
-                println_f!("Remaining URLS: {remaining}");
-                thread::sleep(time::Duration::from_millis(100));
+                thread::sleep(time::Duration::from_millis(1000));
             }
         }
     }

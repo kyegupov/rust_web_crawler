@@ -9,8 +9,8 @@ Ensure you followed all the instructions and the `cargo` command is available.
 
 Clone this repo and `cd` into it.
 
-Run:
+Run in debug mode:
 
     cargo run http://some-website.com
 
-Note: it will take it a minute or two to build the source.
+Note: it might take it a minute or two to build all the dependencies.
